@@ -46,7 +46,8 @@ import           Cardano.Api.TxSubmit as Api
 import           Cardano.Api.Typed as Api
 
 data ShelleyTxCmdError
-  = ShelleyTxCmdAesonDecodeProtocolParamsError !FilePath !Text
+  = ShelleyTxAesonCmdDecodeMultiSigScriptError !FilePath !Text
+  | ShelleyTxCmdAesonDecodeProtocolParamsError !FilePath !Text
   | ShelleyTxCmdReadFileError !(FileError ())
   | ShelleyTxCmdReadTextViewFileError !(FileError TextEnvelopeError)
   | ShelleyTxCmdWriteFileError !(FileError ())
@@ -63,6 +64,9 @@ data ShelleyTxCmdError
 renderShelleyTxCmdError :: ShelleyTxCmdError -> Text
 renderShelleyTxCmdError err =
   case err of
+    ShelleyTxAesonCmdDecodeMultiSigScriptError fp decErr  ->
+      "Error while decoding the multi-sig script at: "
+      <> Text.pack fp <>  " Error: " <> decErr
     ShelleyTxCmdReadFileError fileErr -> Text.pack (displayError fileErr)
     ShelleyTxCmdReadTextViewFileError fileErr -> Text.pack (displayError fileErr)
     ShelleyTxCmdWriteFileError fileErr -> Text.pack (displayError fileErr)
@@ -87,10 +91,7 @@ renderShelleyTxCmdError err =
       "The era of the node and the tx do not match. " <>
       "The node is running in the " <> ledgerEraName <>
       " era, but the transaction is for the " <> otherEraName <> " era."
-    ShelleyTxReadFileException fileErr -> Text.pack (Api.displayError fileErr)
-    ShelleyTxReadFileError fileErr -> Text.pack (Api.displayError fileErr)
-    ShelleyTxWriteFileError fileErr -> Text.pack (Api.displayError fileErr)
-    ShelleyTxMissingNetworkId -> "Please enter network id with your byron transaction"
+    ShelleyTxCmdMissingNetworkId -> "Please enter network id with your byron transaction"
 
 runTransactionCmd :: TransactionCmd -> ExceptT ShelleyTxCmdError IO ()
 runTransactionCmd cmd =
@@ -319,18 +320,18 @@ readSomeWitness scriptOrSkey =
    case scriptOrSkey of
      SigningKeyFileForWitness fp -> readSigningKeyFile $ SigningKeyFile fp
      ScriptFileForWitness fp -> do
-       msJson <- handleIOExceptT (ShelleyTxReadFileException . FileIOError fp)
+       msJson <- handleIOExceptT (ShelleyTxCmdReadFileError . FileIOError fp)
                    $ LBS.readFile fp
        case Aeson.eitherDecode msJson of
          Right ms -> right $ AShelleyMultiSigScript ms
-         Left decErr -> left . ShelleyTxAesonDecodeMultiSigScriptError fp $ Text.pack decErr
+         Left decErr -> left . ShelleyTxAesonCmdDecodeMultiSigScriptError fp $ Text.pack decErr
 
 
 readSigningKeyFile
   :: SigningKeyFile
   -> ExceptT ShelleyTxCmdError IO SomeWitness
 readSigningKeyFile (SigningKeyFile skfile) =
-    firstExceptT ShelleyTxReadFileError . newExceptT
+    firstExceptT ShelleyTxCmdReadTextViewFileError . newExceptT
       $ Api.readFileTextEnvelopeAnyOf fileTypes skfile
   where
     fileTypes =
@@ -439,7 +440,7 @@ runTxCreateWitness (TxBodyFile txbodyFile) sKeyOrScript Nothing (OutputFile oFil
                  return $ makeShelleyScriptWitness (makeMultiSigScript scShelley)
                AByronWitness _ -> throwError ShelleyTxCmdMissingNetworkId
 
-  firstExceptT ShelleyTxWriteFileError
+  firstExceptT ShelleyTxCmdWriteFileError
     . newExceptT
     $ Api.writeFileTextEnvelope oFile Nothing witness
 
@@ -452,8 +453,7 @@ runTxSignWitness (TxBodyFile txBodyFile) witnessFiles (OutputFile oFp) = do
     txBody <- firstExceptT ShelleyTxCmdReadTextViewFileError
       . newExceptT
       $ Api.readFileTextEnvelope Api.AsShelleyTxBody txBodyFile
-    witnesses <- firstExceptT ShelleyTxCmdReadTextViewFileError
-      $ mapM readWitnessFile witnessFiles
+    witnesses <- mapM readWitnessFile witnessFiles
     let tx = Api.makeSignedTransaction witnesses txBody
     firstExceptT ShelleyTxCmdWriteFileError
       . newExceptT
@@ -461,7 +461,7 @@ runTxSignWitness (TxBodyFile txBodyFile) witnessFiles (OutputFile oFp) = do
 
 readWitnessFile :: WitnessFile -> ExceptT ShelleyTxCmdError IO (Witness Shelley)
 readWitnessFile (WitnessFile fp) =
-  firstExceptT ShelleyTxReadFileError $ newExceptT (Api.readFileTextEnvelope AsShelleyWitness fp)
+  firstExceptT ShelleyTxCmdReadTextViewFileError $ newExceptT (Api.readFileTextEnvelope AsShelleyWitness fp)
 
 runTxBuildMultiSig :: MultiSigScriptObject -> Maybe OutputFile -> ExceptT ShelleyTxCmdError IO ()
 runTxBuildMultiSig msso mOutputFile = do
@@ -473,7 +473,7 @@ runTxBuildMultiSig msso mOutputFile = do
   readPaymentVerificationKeys :: [VerificationKeyFile] -> ExceptT ShelleyTxCmdError IO [VerificationKey PaymentKey]
   readPaymentVerificationKeys fps = do
     eVerKeys <- liftIO $ mapM (readFileTextEnvelopeAnyOf fileTypes . unVerificationKeyFile) fps
-    someKeys <- sequence $ map (firstExceptT ShelleyTxReadFileError . hoistEither ) eVerKeys
+    someKeys <- sequence $ map (firstExceptT ShelleyTxCmdReadTextViewFileError . hoistEither) eVerKeys
     right $ map convertToVerificationKey someKeys
 
   fileTypes = [ FromSomeType (AsVerificationKey AsPaymentKey) SomePaymentVerificationKey

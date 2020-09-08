@@ -7,7 +7,7 @@ When you start the node using the default configuration, logging is switched on,
 You can change these configurations in the node's config file, for example: mainnet-config.json`
 
 #### Enable and disable logs
-We can disable logging completely by setting `TurnOnLoggin` to `False`:
+We can disable logging completely by setting `TurnOnLogging` to `False`:
 
     TurnOnLogging: False
 
